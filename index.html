@@ -219,7 +219,7 @@ label.lbl,div.lbl{display:grid;gap:4px;font-size:15px;color:var(--muted)}
 .prog{height:8px;border-radius:999px;background:var(--paper-2);overflow:hidden;margin-top:6px}
 .prog i{display:block;height:100%;background:var(--hot)}
 .stars{display:inline-flex;gap:2px}
-.stars button{border:none;background:none;font-size:26px;cursor:pointer;color:var(--rose);padding:0;line-height:1}
+.stars button{border:none;background:none;font-size:30px;cursor:pointer;color:var(--line);padding:2px 3px;line-height:1;touch-action:manipulation}
 .stars button.on{color:var(--hot)}
 
 /* ---------- board ---------- */
@@ -252,7 +252,7 @@ label.lbl,div.lbl{display:grid;gap:4px;font-size:15px;color:var(--muted)}
 .st.start .num{fill:var(--lace);font-family:var(--f-body);font-style:italic;font-size:12px}
 .st:hover .disc,.st:focus-visible .disc{stroke:var(--hot);stroke-width:3.5}
 .num{font-family:var(--f-pixel);font-size:16px;fill:var(--hot);text-anchor:middle;dominant-baseline:central;pointer-events:none}
-.lbl{font-family:var(--f-body);font-style:italic;font-weight:600;font-size:11.5px;fill:var(--muted);text-anchor:middle;dominant-baseline:central;pointer-events:none}
+svg .lbl{font-family:var(--f-body);font-style:italic;font-weight:600;font-size:11.5px;fill:var(--muted);text-anchor:middle;dominant-baseline:central;pointer-events:none}
 @media (max-width:560px){.poster .lbl{display:none}}
 .ring{fill:none;stroke:var(--candy);stroke-width:2.5;animation:pulse 1.8s ease-out infinite;transform-box:fill-box;transform-origin:center}
 @keyframes pulse{from{transform:scale(1);opacity:.9}to{transform:scale(1.8);opacity:0}}
@@ -294,11 +294,13 @@ label.lbl,div.lbl{display:grid;gap:4px;font-size:15px;color:var(--muted)}
 .src{font-family:var(--f-pixel);font-size:13px;letter-spacing:.06em;color:var(--hot)}
 
 /* ---------- modal & toast ---------- */
-.scrim{position:fixed;inset:0;z-index:50;background:color-mix(in srgb,var(--ink) 45%,transparent);display:grid;justify-items:center;align-items:start;overflow-y:auto;-webkit-overflow-scrolling:touch;overscroll-behavior:contain;padding:max(16px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(40px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
+.scrim{position:fixed;inset:0;z-index:50;background:color-mix(in srgb,var(--ink) 45%,transparent);display:grid;justify-items:center;align-items:start;overflow-y:auto;padding:max(16px,env(safe-area-inset-top,0px)) max(12px,env(safe-area-inset-right,0px)) max(40px,env(safe-area-inset-bottom,0px)) max(12px,env(safe-area-inset-left,0px))}
 .scrim .win{width:min(640px,100%);min-width:0;margin-top:2vh;display:flex;flex-direction:column}
 .scrim .win-body{display:grid;gap:12px;min-width:0}
 .scrim .win-body > *,.scrim form > *,.row > *,label.lbl{min-width:0}
-.field[type=date],.field[type=time],.field[type=month]{-webkit-appearance:none;appearance:none;min-height:44px;min-width:0;max-width:100%}
+.field[type=date],.field[type=time],.field[type=month]{min-height:46px;min-width:0;max-width:100%;display:block}
+.field::-webkit-date-and-time-value{text-align:left}
+.field[type=color]{min-height:46px;cursor:pointer}
 .scrim .win-bar .x{font-size:24px;padding:4px 8px}
 .save-bar{position:sticky;bottom:0;background:var(--lace);padding:10px 0 2px;border-top:1px dashed var(--line)}
 .toast{position:fixed;left:50%;bottom:calc(18px + env(safe-area-inset-bottom,0px));transform:translateX(-50%);z-index:60;background:var(--ink);color:var(--paper);padding:8px 18px;border-radius:999px;font-family:var(--f-pixel);font-size:15px;max-width:calc(100% - 32px);text-align:center}
