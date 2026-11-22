@@ -140,10 +140,16 @@ label.lbl,div.lbl{display:grid;gap:4px;font-size:15px;color:var(--muted)}
 .day .dot{display:block;height:6px;font-size:10px;line-height:6px;color:var(--hot)}
 .day[aria-pressed="true"] .dot{color:var(--lace)}
 .tasks{list-style:none;margin:0;padding:0;display:grid;gap:2px}
-.task{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px dashed var(--line)}
+.task{display:grid;grid-template-columns:auto auto minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:7px 4px;border-bottom:1px dashed var(--line)}
 .task .time{font-family:var(--f-pixel);font-size:14px;color:var(--muted);min-width:44px}
 .task .txt{overflow-wrap:anywhere;cursor:text}
 .task .time{cursor:pointer}
+.tocal{border:1px solid var(--line);background:var(--paper);color:var(--muted);border-radius:999px;font-family:var(--f-pixel);font-size:12px;padding:2px 8px;cursor:pointer;white-space:nowrap}
+.tocal.on{color:var(--ok);border-color:currentColor;cursor:default}
+.gev{display:grid;grid-template-columns:62px minmax(0,1fr) auto;gap:10px;align-items:baseline;padding:7px 0;border-bottom:1px dashed var(--line)}
+.gev .when{font-family:var(--f-pixel);font-size:14px;color:var(--hot)}
+.gev .what{overflow-wrap:anywhere}
+.gev a{font-size:14px;color:var(--muted)}
 .task.done .txt{text-decoration:line-through;text-decoration-color:var(--hot);color:var(--muted)}
 .heart{appearance:none;-webkit-appearance:none;width:26px;height:26px;margin:0;cursor:pointer;border:none;background:none;position:relative;flex:0 0 auto}
 .heart::before{content:"\2661";position:absolute;inset:0;font-size:25px;line-height:26px;text-align:center;color:var(--rose);font-family:var(--f-body)}
@@ -339,6 +345,7 @@ svg .lbl{font-family:var(--f-body);font-style:italic;font-weight:600;font-size:1
 <body>
 <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2.49.4/dist/umd/supabase.min.js"></script>
 <script src="config.js"></script>
+<script src="https://accounts.google.com/gsi/client" async defer></script>
 <nav class="tabs" aria-label="Seções"><div class="tabs-in" id="tabs"></div></nav>
 <main class="wrap" id="app"></main>
 
@@ -707,6 +714,93 @@ document.addEventListener('click', e => {
 });
 
 /* =========================================================
+   GOOGLE CALENDAR (ver e criar eventos)
+   ========================================================= */
+const GCAL = {token: null, exp: 0, client: null, events: {}, loading: {}, err: {}};
+try { const t = JSON.parse(localStorage.getItem('jc:gtok') || 'null'); if (t && t.exp > Date.now() + 60000){ GCAL.token = t.token; GCAL.exp = t.exp; } } catch {}
+const gcalReady = () => !!((window.JC_CONFIG || {}).googleClientId);
+const gcalConnected = () => !!(GCAL.token && GCAL.exp > Date.now() + 30000);
+const TZ = (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return 'America/Sao_Paulo'; } })();
+function gcalAuth(){
+  return new Promise((resolve, reject) => {
+    if (!(window.google && google.accounts && google.accounts.oauth2)) return reject(new Error('O Google ainda está carregando. Tente de novo em instantes.'));
+    let seen = false; try { seen = localStorage.getItem('jc:gcal') === '1'; } catch {}
+    GCAL.client = google.accounts.oauth2.initTokenClient({
+      client_id: JC_CONFIG.googleClientId,
+      scope: 'https://www.googleapis.com/auth/calendar.events',
+      callback: r => {
+        if (r.error) return reject(new Error(r.error_description || r.error));
+        GCAL.token = r.access_token; GCAL.exp = Date.now() + (Number(r.expires_in || 3600) - 60) * 1000;
+        try { localStorage.setItem('jc:gtok', JSON.stringify({token: GCAL.token, exp: GCAL.exp})); localStorage.setItem('jc:gcal', '1'); } catch {}
+        resolve();
+      },
+      error_callback: e => reject(new Error(e && e.type === 'popup_closed' ? 'A janela do Google foi fechada antes de terminar.' : 'Não consegui abrir a janela do Google.')),
+    });
+    GCAL.client.requestAccessToken({prompt: seen ? '' : 'consent'});
+  });
+}
+async function gapi(path, opts = {}){
+  if (!gcalConnected()) throw Object.assign(new Error('auth'), {auth: true});
+  const r = await fetch('https://www.googleapis.com/calendar/v3/' + path, {...opts, headers: {Authorization: 'Bearer ' + GCAL.token, 'Content-Type': 'application/json'}});
+  if (r.status === 401){ GCAL.token = null; try { localStorage.removeItem('jc:gtok'); } catch {} throw Object.assign(new Error('auth'), {auth: true}); }
+  if (!r.ok) throw new Error('O Google respondeu com erro ' + r.status + '.');
+  return r.status === 204 ? null : r.json();
+}
+async function gcalLoadDay(key){
+  const d = parseKey(key), e = new Date(d); e.setDate(d.getDate() + 1);
+  const q = new URLSearchParams({timeMin: d.toISOString(), timeMax: e.toISOString(), singleEvents: 'true', orderBy: 'startTime', maxResults: '50'});
+  const j = await gapi('calendars/primary/events?' + q);
+  GCAL.events[key] = (j.items || []).filter(x => x.status !== 'cancelled');
+}
+function addMin(hhmm, mins){ const [h, m] = hhmm.split(':').map(Number); const t = h * 60 + m + mins; const c = Math.min(t, 23 * 60 + 59); return pad(Math.floor(c / 60)) + ':' + pad(c % 60); }
+function nextDay(key){ const d = parseKey(key); d.setDate(d.getDate() + 1); return dkey(d); }
+async function gcalCreate({title, date, start, end, desc}){
+  const body = {summary: title, description: desc || 'Criado no Ju\'s Corner'};
+  if (start){ body.start = {dateTime: `${date}T${start}:00`, timeZone: TZ}; body.end = {dateTime: `${date}T${end || addMin(start, 60)}:00`, timeZone: TZ}; }
+  else { body.start = {date}; body.end = {date: nextDay(date)}; }
+  return gapi('calendars/primary/events', {method: 'POST', body: JSON.stringify(body)});
+}
+function gcalFail(err){
+  if (err && err.auth){ toast('A conexão com o Google expirou. Toque em reconectar.'); renderGcal(); if (current === 'agenda') VIEWS.agenda.update(); }
+  else toast((err && err.message) || 'Não consegui falar com o Google.');
+}
+function evTime(ev){
+  if (ev.start && ev.start.date) return 'dia todo';
+  try { return new Date(ev.start.dateTime).toLocaleTimeString('pt-BR', {hour: '2-digit', minute: '2-digit'}); } catch { return ''; }
+}
+function renderGcal(){
+  const box = $('#ag-gcal'); if (!box) return;
+  const k = agendaDay;
+  if (!gcalReady()){ box.innerHTML = ''; return; }
+  if (!gcalConnected()){
+    let seen = false; try { seen = localStorage.getItem('jc:gcal') === '1'; } catch {}
+    box.innerHTML = windowBox('google_calendar.ics', `<p style="margin:0 0 10px">${seen ? 'A conexão com o Google dura uma hora por vez. Toque para ver e criar eventos de novo.' : 'Veja os eventos do seu Google Calendar aqui e mande tarefas da lista para lá.'}</p><button class="btn solid" id="gc-con">${seen ? 'reconectar Google' : 'conectar Google Calendar'}</button>`);
+    $('#gc-con').onclick = () => gcalAuth().then(() => { if (current === 'agenda') VIEWS.agenda.update(); }).catch(gcalFail);
+    return;
+  }
+  const evs = GCAL.events[k];
+  if (!evs && !GCAL.loading[k]){
+    GCAL.loading[k] = true;
+    gcalLoadDay(k).then(() => { GCAL.loading[k] = false; if (agendaDay === k) renderGcal(); }).catch(err => { GCAL.loading[k] = false; GCAL.events[k] = []; gcalFail(err); if (agendaDay === k) renderGcal(); });
+  }
+  const list = !evs ? `<p class="muted" style="margin:0">carregando eventos…</p>` : evs.length ? evs.map(ev => `<div class="gev"><span class="when">${esc(evTime(ev))}</span><span class="what">${esc(ev.summary || '(sem título)')}</span>${safeUrl(ev.htmlLink) ? `<a href="${esc(ev.htmlLink)}" target="_blank" rel="noopener">abrir ↗</a>` : '<span></span>'}</div>`).join('') : `<p class="muted" style="margin:0">Nenhum evento no Google neste dia.</p>`;
+  box.innerHTML = windowBox('google_calendar.ics', `${list}
+    <form id="gc-form" class="grid" style="gap:8px;margin-top:12px" autocomplete="off">
+      <input class="field" id="gc-t" placeholder="novo evento no Google…" aria-label="Título do evento">
+      <div class="row"><label class="lbl grow">começa<input class="field" id="gc-s" type="time"></label><label class="lbl grow">termina<input class="field" id="gc-e" type="time"></label></div>
+      <p class="small muted" style="margin:0">Sem horário, o evento fica como dia inteiro.</p>
+      <div class="row" style="justify-content:space-between"><button type="button" class="btn ghost" id="gc-ref">atualizar</button><button class="btn solid">criar no Google</button></div>
+    </form>`);
+  $('#gc-ref').onclick = () => { delete GCAL.events[k]; renderGcal(); };
+  $('#gc-form').onsubmit = e => { e.preventDefault();
+    const title = $('#gc-t').value.trim(); if (!title){ toast('Escreva o nome do evento'); return; }
+    const start = $('#gc-s').value, end = $('#gc-e').value;
+    if (start && end && end <= start){ toast('O fim precisa ser depois do começo'); return; }
+    gcalCreate({title, date: k, start, end}).then(() => { toast('Evento criado no Google ✦'); delete GCAL.events[k]; renderGcal(); }).catch(gcalFail);
+  };
+}
+
+/* =========================================================
    AGENDA
    ========================================================= */
 let agendaDay = todayKey();
@@ -729,6 +823,7 @@ VIEWS.agenda = {
             </form>
             <ul class="tasks" id="ag-list" style="margin-top:10px"></ul>
             <div id="ag-done" style="margin-top:10px"></div>`)}</div>
+          <div id="ag-gcal"></div>
           <div>${windowBox('notinha_do_dia.txt', `<textarea class="field" id="ag-note" rows="9" placeholder="pensamentos, humor, o que aconteceu…" aria-label="Nota do dia"></textarea><div class="status" id="ag-note-st" style="margin-top:4px"></div>`)}</div>
         </div>
       </div>`;
@@ -752,6 +847,13 @@ VIEWS.agenda = {
         if (e.target.checked) burst(e.target);
       } else if (e.target.closest('.x')){
         put('agenda', agendaDay, {...day, items: day.items.filter(i => i.id !== li.dataset.id)});
+      } else if (e.target.closest('[data-tocal]')){
+        const k = agendaDay, it = day.items.find(i => i.id === li.dataset.id); if (!it) return;
+        const btn = e.target.closest('[data-tocal]'); btn.disabled = true; btn.textContent = '…';
+        gcalCreate({title: it.text, date: k, start: it.time}).then(ev => {
+          const dd = D.agenda[k]; if (dd) put('agenda', k, {...dd, items: dd.items.map(i => i.id === it.id ? {...i, gEventId: ev.id} : i)});
+          toast('Evento criado no Google ✦'); delete GCAL.events[k]; renderGcal();
+        }).catch(err => { btn.disabled = false; btn.textContent = '+ cal'; gcalFail(err); });
       } else if (e.target.closest('.txt,.time')){
         const k = agendaDay, it = day.items.find(i => i.id === li.dataset.id); if (!it) return;
         modal('editar tarefa', `<form id="te" class="grid" style="gap:10px"><div class="row"><input class="field" id="te-h" type="time" value="${esc(it.time||'')}" style="flex:0 0 120px" aria-label="Horário"><input class="field grow" id="te-t" value="${esc(it.text)}" aria-label="Tarefa" required></div><div class="row" style="justify-content:flex-end"><button class="btn solid">salvar</button></div></form>`, (s, close) => {
@@ -776,8 +878,9 @@ VIEWS.agenda = {
     $('#ag-title').textContent = (agendaDay === tk ? 'hoje · ' : '') + fmtLong(d0);
     const day = D.agenda[agendaDay] || {items: []};
     const items = [...(day.items||[])].sort((a,b) => (a.time||'99').localeCompare(b.time||'99'));
-    $('#ag-list').innerHTML = items.length ? items.map(i => `<li class="task ${i.done?'done':''}" data-id="${esc(i.id)}"><input type="checkbox" class="heart" ${i.done?'checked':''} aria-label="Concluir ${esc(i.text)}"><span class="time">${esc(i.time||'')}</span><span class="txt">${esc(i.text)}</span><button class="x" aria-label="Apagar">✕</button></li>`).join('') : `<li class="empty">Lista vazia. Escreva a primeira tarefa acima.</li>`;
+    $('#ag-list').innerHTML = items.length ? items.map(i => `<li class="task ${i.done?'done':''}" data-id="${esc(i.id)}"><input type="checkbox" class="heart" ${i.done?'checked':''} aria-label="Concluir ${esc(i.text)}"><span class="time">${esc(i.time||'')}</span><span class="txt">${esc(i.text)}</span>${i.gEventId ? `<span class="tocal on" title="Já está no Google Calendar">✓ cal</span>` : gcalConnected() ? `<button class="tocal" data-tocal title="Criar no Google Calendar">+ cal</button>` : '<span></span>'}<button class="x" aria-label="Apagar">✕</button></li>`).join('') : `<li class="empty">Lista vazia. Escreva a primeira tarefa acima.</li>`;
     const all = items.length && items.every(i => i.done);
+    renderGcal();
     $('#ag-done').innerHTML = all ? `<div class="daydone"><img src="img/selo2.webp" alt="">dia completo!</div>` : items.length ? `<div class="eyebrow">${items.filter(i=>i.done).length} de ${items.length} feitos</div>` : '';
     const note = $('#ag-note');
     if (force || document.activeElement !== note) note.value = day.note || '';
