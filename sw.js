@@ -1,5 +1,5 @@
 // Ju's Corner · funciona offline. Mude a versão para forçar atualização.
-const V = 'juscorner-v3';
+const V = 'juscorner-v4';
 const SHELL = ['./', 'index.html', 'config.js', 'manifest.webmanifest', 'img/cisnes.webp', 'img/envelope2.webp', 'img/selo2.webp', 'img/selo.webp', 'img/flores.webp', 'img/teto.webp', 'img/icon-192.png'];
 self.addEventListener('install', e => { e.waitUntil(caches.open(V).then(c => c.addAll(SHELL))); self.skipWaiting(); });
 self.addEventListener('activate', e => { e.waitUntil(caches.keys().then(ks => Promise.all(ks.filter(k => k !== V).map(k => caches.delete(k)))).then(() => self.clients.claim())); });

@@ -1006,40 +1006,84 @@ function parseCSV(text){
   if (f || row.length){ row.push(f); rows.push(row); }
   return rows.filter(r => r.some(x => x.trim()));
 }
+function parseNotionText(raw){
+  raw = raw.replace(/^﻿/, '').replace(/\r\n?/g, '\n').trim();
+  const first = raw.split('\n')[0];
+  // 1) CSV de banco de dados do Notion
+  if (first.includes(',') && !/^\s*([#→\-*•]|\d+[.)])/.test(first)){
+    const rows = parseCSV(raw); if (rows.length < 2) return [];
+    const hdr = rows.shift().map(h => h.trim().replace(/^﻿/, ''));
+    const find = re => hdr.findIndex(h => re.test(h));
+    let iN = find(/^(name|nome|t[ií]tulo|title)$/i); if (iN < 0) iN = 0;
+    const iT = find(/tag|categor|label/i), iU = find(/^(url|link|site)/i), iK = find(/^(type|tipo|kind)$/i), iB = find(/^(notes?|notas?|descri|text|texto)/i);
+    return rows.map(r => {
+      const extra = hdr.map((h, j) => [h, r[j]]).filter(([h, v], j) => ![iN,iT,iU,iK,iB].includes(j) && v && v.trim() && !/^(created|criado|last edited|editado)/i.test(h)).map(([h, v]) => `${h}: ${v}`);
+      const kind = iK >= 0 ? (r[iK]||'').trim().toLowerCase() : '';
+      const url = iU >= 0 ? (r[iU]||'').trim() : '';
+      return {title: (r[iN] || '').trim(), url, tags: iT >= 0 ? (r[iT]||'').split(/[,;]/).map(t => t.trim().toLowerCase()).filter(Boolean) : [], kind: KINDS.includes(kind) ? kind : url ? 'link' : 'referência', body: [iB >= 0 ? r[iB] : '', ...extra].filter(Boolean).join('\n')};
+    }).filter(e => e.title);
+  }
+  // 2) página do Notion em Markdown: títulos (#, →, linha solta) com itens embaixo viram uma ficha cada
+  const out = []; let cur = null;
+  const bullet = /^\s*([-*•]|\d+[.)]|-\s\[[ xX]\])\s+/;
+  const md = /\[([^\]]+)\]\((https?:\/\/[^)\s]+)\)/;
+  const lines = raw.split('\n');
+  const flush = () => { if (cur && cur.items.length) out.push({title: cur.title, kind: cur.items.length > 1 ? 'lista' : 'pensamento', tags: cur.tags, url: '', body: cur.items.join('\n')}); cur = null; };
+  for (let k = 0; k < lines.length; k++){
+    const line = lines[k].trim(); if (!line) continue;
+    const isBullet = bullet.test(line);
+    const text = line.replace(bullet, '').replace(/^#+\s*/, '').replace(/^→\s*/, '').replace(/\*\*/g, '').trim(); if (!text) continue;
+    const link = text.match(md) || (text.match(/^(https?:\/\/\S+)$/) ? [text, text, text] : null);
+    if (link && !isBullet){ out.push({title: link[1].replace(/^https?:\/\//, '').slice(0, 120), url: link[2], kind: 'link', tags: cur ? [cur.title.toLowerCase().slice(0, 40)] : [], body: ''}); continue; }
+    const next = (lines.slice(k + 1).find(x => x.trim()) || '').trim();
+    const nextIsItem = bullet.test(next) || md.test(next) || /^https?:\/\//.test(next);
+    const isHead = /^(#|→)/.test(line) || (!isBullet && (nextIsItem || /:$/.test(text)));
+    if (isHead){ flush(); cur = {title: text.replace(/:$/, ''), items: [], tags: [], open: /:$/.test(text)}; continue; }
+    if (isBullet && cur){ cur.items.push(text.replace(md, '$1 ($2)')); continue; }
+    if (!isBullet && cur && cur.open && !cur.items.length){ cur.items.push(text); continue; }
+    if (isBullet){ out.push({title: text.slice(0, 140), kind: 'pensamento', tags: [], url: '', body: ''}); continue; }
+    flush(); out.push({title: text.slice(0, 140), kind: 'pensamento', tags: [], url: '', body: ''});
+  }
+  flush();
+  return out.filter(e => e.title);
+}
+async function readImportFile(file){
+  if (/\.zip$/i.test(file.name)){
+    if (!window.JSZip) await new Promise((ok, no) => { const sc = document.createElement('script'); sc.src = 'https://cdn.jsdelivr.net/npm/jszip@3.10.1/dist/jszip.min.js'; sc.onload = ok; sc.onerror = () => no(new Error('Não consegui abrir o .zip. Confira a internet e tente de novo.')); document.head.appendChild(sc); });
+    const zip = await JSZip.loadAsync(file);
+    const names = Object.keys(zip.files).filter(n => !zip.files[n].dir && !/__MACOSX/.test(n));
+    const csvs = names.filter(n => /\.csv$/i.test(n)).sort((a, b) => (/_all\.csv$/i.test(b) ? 1 : 0) - (/_all\.csv$/i.test(a) ? 1 : 0));
+    if (csvs.length) return zip.files[csvs[0]].async('string');
+    const mds = names.filter(n => /\.(md|txt)$/i.test(n));
+    if (!mds.length) throw new Error('Esse .zip não tem arquivo .csv nem .md.');
+    const parts = await Promise.all(mds.map(n => zip.files[n].async('string')));
+    return parts.join('\n\n');
+  }
+  return file.text();
+}
 function gardenImport(){
   modal('importar do Notion', `
-    <p style="margin:0">No Notion, abra a sua lista › <b>•••</b> › <b>Export</b> › <b>Markdown &amp; CSV</b>. Abra o arquivo .csv e cole tudo aqui. Também funciona colar uma lista simples, um item por linha.</p>
-    <p class="muted small" style="margin:0">Colunas reconhecidas: Name/Nome/Título, Tags, URL/Link, Type/Tipo, Notes/Notas. As outras colunas vão para as notas.</p>
-    <textarea class="field" id="imp-t" rows="10" placeholder="Name,Tags,URL&#10;Ways of Seeing,arte;ensaio,https://…"></textarea>
-    <div class="row" style="justify-content:space-between"><span class="status" id="imp-st"></span><button class="btn solid" id="imp-go">importar</button></div>`, (s) => {
+    <p style="margin:0"><b>Jeito mais fácil no iPhone:</b> no Notion, abra a página, toque em <b>•••</b>, selecione tudo, copie e cole aqui embaixo.</p>
+    <p style="margin:0">Também funciona enviar o arquivo que o Notion exporta (<b>••• › Export</b>): pode ser o <b>.zip</b> direto, ou o .csv ou .md.</p>
+    <label class="btn" style="justify-self:start">escolher arquivo<input type="file" id="imp-f" accept=".zip,.csv,.md,.txt,text/csv,text/markdown,text/plain,application/zip" hidden></label>
+    <textarea class="field" id="imp-t" rows="10" placeholder="→ advice&#10;• expect nothing, appreciate everything&#10;• nothing changes if nothing changes"></textarea>
+    <p class="muted small" style="margin:0">Cada título com itens embaixo vira uma ficha. Links viram fichas de link.</p>
+    <div class="row" style="justify-content:space-between"><span class="status" id="imp-st"></span><button type="button" class="btn solid" id="imp-go">importar</button></div>`, (s) => {
+      const st = t => { $('#imp-st', s).textContent = t; };
+      $('#imp-f', s).onchange = async e => { const f = e.target.files[0]; if (!f) return; st('lendo arquivo…');
+        try { $('#imp-t', s).value = await readImportFile(f); st('arquivo lido. confira e toque em importar.'); } catch (err) { st(err.message || 'Não consegui ler esse arquivo.'); } };
       $('#imp-go', s).onclick = async () => {
-        const raw = $('#imp-t', s).value.trim(); if (!raw) return;
-        let entries = [];
-        const first = raw.split('\n')[0];
-        if (first.includes(',') && /name|nome|t[ií]tulo|title/i.test(first)){
-          const rows = parseCSV(raw), hdr = rows.shift().map(h => h.trim().replace(/^﻿/, ''));
-          const find = re => hdr.findIndex(h => re.test(h));
-          const iN = find(/^(name|nome|t[ií]tulo|title)$/i), iT = find(/tag|categor/i), iU = find(/^(url|link|site)/i), iK = find(/^(type|tipo|kind)$/i), iB = find(/^(notes?|notas?|descri)/i);
-          entries = rows.map(r => {
-            const extra = hdr.map((h, j) => [h, r[j]]).filter(([h, v], j) => ![iN,iT,iU,iK,iB].includes(j) && v && v.trim()).map(([h, v]) => `${h}: ${v}`).join('\n');
-            const kind = iK >= 0 ? (r[iK]||'').trim().toLowerCase() : '';
-            return {title: (r[iN] || '').trim(), url: iU >= 0 ? (r[iU]||'').trim() : '', tags: iT >= 0 ? (r[iT]||'').split(/[,;]/).map(t => t.trim().toLowerCase()).filter(Boolean) : [], kind: KINDS.includes(kind) ? kind : 'referência', body: [iB >= 0 ? r[iB] : '', extra].filter(Boolean).join('\n')};
-          }).filter(e => e.title);
-        } else {
-          entries = raw.split('\n').map(l => l.replace(/^\s*([-*•]|\d+[.)]|- \[[ x]\])\s*/i, '').trim()).filter(Boolean).map(l => { const m = l.match(/https?:\/\/\S+/); return {title: l.replace(/https?:\/\/\S+/, '').trim() || l, url: m ? m[0] : '', tags: [], kind: m ? 'link' : 'referência', body: ''}; });
-        }
-        if (!entries.length){ $('#imp-st', s).textContent = 'Não achei itens. Confira se a primeira linha tem os nomes das colunas.'; return; }
+        const raw = $('#imp-t', s).value.trim();
+        if (!raw){ st('Cole o texto do Notion ou escolha um arquivo primeiro.'); toast('Nada para importar ainda'); return; }
+        const entries = parseNotionText(raw);
+        if (!entries.length){ st('Não achei itens nesse texto.'); return; }
         $('#imp-go', s).disabled = true;
         try {
-          for (let i = 0; i < entries.length; i++){
-            const id = uid(), body = {...entries[i], createdAt: Date.now(), updatedAt: Date.now()};
-            D.garden = {...D.garden, [id]: body};
-            if (MODE === 'cloud'){ const {error} = await SB.from('docs').upsert({user_id: SB_USER.id, collection: 'garden', id, data: body}); if (error) throw error; }
-            if (i === entries.length - 1){ local.write('garden'); onData('garden'); }
-            if (i % 5 === 0) $('#imp-st', s).textContent = `arquivando ${i+1} de ${entries.length}…`;
-          }
-        } catch (err) { $('#imp-st', s).textContent = err && err.code === 'quota_exceeded' ? 'O cantinho encheu antes de terminar.' : 'A importação parou no meio. Cole de novo só o que faltou.'; $('#imp-go', s).disabled = false; return; }
-        $('#imp-st', s).textContent = `${entries.length} fichas arquivadas ✦`; $('#imp-go', s).disabled = false;
+          const rows = entries.map(e => { const id = uid() + Math.random().toString(36).slice(2, 5); const body = {...e, createdAt: Date.now(), updatedAt: Date.now()}; D.garden = {...D.garden, [id]: body}; return {collection: 'garden', id, data: body}; });
+          local.write('garden'); onData('garden');
+          if (MODE === 'cloud') for (let i = 0; i < rows.length; i += 200){ st(`enviando ${Math.min(i + 200, rows.length)} de ${rows.length}…`); const {error} = await SB.from('docs').upsert(rows.slice(i, i + 200).map(r => ({...r, user_id: SB_USER.id}))); if (error) throw error; }
+        } catch (err) { st('Salvou neste aparelho, mas não consegui sincronizar agora. Tente de novo com internet.'); $('#imp-go', s).disabled = false; return; }
+        st(`${entries.length} fichas arquivadas ✦`); toast(`${entries.length} fichas no jardim ✦`); $('#imp-t', s).value = ''; $('#imp-go', s).disabled = false;
       };
     });
 }
